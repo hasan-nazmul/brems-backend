@@ -19,7 +19,7 @@ COPY . .
 
 # 5. Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
-RUN composer install --no-dev --optimize-autoloader
+RUN composer install --optimize-autoloader
 
 # 6. Set permissions
 RUN chown -R www-data:www-data /var/www/html
