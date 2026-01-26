@@ -19,7 +19,10 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['*'],
+    'allowed_origins' => [
+        'http://localhost:5173',
+        'https://brems-frontend.vercel.app', // <--- Add your ACTUAL Vercel URL here
+    ],
 
     'allowed_origins_patterns' => [],
 
