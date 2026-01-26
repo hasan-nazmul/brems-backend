@@ -1,8 +1,6 @@
-# 1. Use PHP 8.4 to match your composer.lock requirements
 FROM php:8.4-apache
 
-# 2. Install dependencies
-# We include git, zip, and unzip for Composer
+# 1. Install dependencies
 RUN apt-get update && apt-get install -y \
     libzip-dev \
     zip \
@@ -10,31 +8,44 @@ RUN apt-get update && apt-get install -y \
     git \
     && docker-php-ext-install pdo_mysql zip
 
-# 3. Enable Apache mod_rewrite
+# 2. Enable Apache mod_rewrite
 RUN a2enmod rewrite
 
-# 4. Set working directory
+# 3. Set working directory
 WORKDIR /var/www/html
 
-# 5. Copy application files
+# 4. Copy application files (Includes your isrgrootx1.pem SSL cert)
 COPY . .
 
-# 6. Install Composer
+# 5. Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 RUN composer install --no-dev --optimize-autoloader
 
-# 7. Set permissions
-# We give ownership of the whole HTML folder to www-data.
+# 6. Set permissions
 RUN chown -R www-data:www-data /var/www/html
 
-# 8. Configure Apache DocumentRoot to point to public
+# 7. Configure Apache DocumentRoot
 ENV APACHE_DOCUMENT_ROOT /var/www/html/public
-
 RUN sed -ri -e 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/sites-available/*.conf
-
-# --- THE FIX ---
-# Correct path (no .0 at the end)
 RUN sed -ri -e 's!/var/www/!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/apache2.conf
 
-# 9. Expose Port
+# 8. ENABLE .HTACCESS (Crucial Fix for 404 Errors)
+# This explicitly allows Apache to read the .htaccess file in the public folder.
+# Without this, "AllowOverride" defaults to None, and routes break.
+RUN echo '<Directory /var/www/html/public/> \n\
+    Options Indexes FollowSymLinks \n\
+    AllowOverride All \n\
+    Require all granted \n\
+</Directory>' > /etc/apache2/conf-available/laravel.conf \
+&& a2enconf laravel
+
+# 9. Copy and run the entrypoint script
+# Ensure "docker-entrypoint.sh" exists in your project root
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Set the entrypoint
+ENTRYPOINT ["docker-entrypoint.sh"]
+
+# 10. Expose Port
 EXPOSE 80

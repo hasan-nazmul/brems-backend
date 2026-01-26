@@ -93,7 +93,7 @@ class DatabaseSeeder extends Seeder
         User::create([
             'name' => 'Super Admin',
             'email' => 'admin@admin.com',
-            'password' => 'password', // Will be hashed by Model cast
+            'password' => Hash::make('password'),
             'office_id' => $hq->id,
             'role' => 'super_admin',
             'employee_id' => $adminEmp->id,
@@ -125,7 +125,7 @@ class DatabaseSeeder extends Seeder
                     User::create([
                         'name' => $emp->first_name . ' ' . $emp->last_name,
                         'email' => $email,
-                        'password' => 'password',
+                        'password' => Hash::make('password'),
                         'office_id' => $office->id,
                         'role' => $desig->default_role,
                         'employee_id' => $emp->id,
