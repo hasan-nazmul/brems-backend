@@ -12,7 +12,7 @@ use App\Http\Controllers\ProfileRequestController;
 use App\Http\Controllers\DashboardController; 
 
 // Public Login
-Route::post('/login', [AuthController::class, 'login']);
+Route::post('/login', [AuthController::class, 'login'])->name('login');
 
 // Protected Routes
 Route::middleware('auth:sanctum')->group(function () {
@@ -21,6 +21,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // DASHBOARD STATS (Make sure this line is here)
     Route::get('/dashboard-stats', [DashboardController::class, 'index']);
+
+    Route::get('/employees/export-csv', [EmployeeController::class, 'exportCSV']);
+    Route::get('/employees/export-pdf', [EmployeeController::class, 'exportPDF']);
 
     // ... your other routes (employees, offices, etc) ...
     Route::get('/employees', [EmployeeController::class, 'index']);

@@ -344,11 +344,48 @@ class EmployeeController extends Controller
         return response()->json(['message' => 'Access settings updated successfully', 'user' => $user]);
     }
 
-    // EXPORT TO CSV
-    public function exportCSV()
+    // Inside App\Http\Controllers\EmployeeController.php
+
+    /**
+     * Helper to apply the same filters to UI and Exports
+     */
+    private function getFilteredQuery(Request $request)
     {
-        $employees = Employee::with('office', 'designation')->get();
-        $filename = "employees-export-" . date('Y-m-d') . ".csv";
+        $user = $request->user();
+        $query = Employee::with(['office', 'designation', 'user']); // Loaded 'user' for email
+
+        // 1. Role-Based Security
+        if ($user->role === 'office_admin') {
+            $query->where('current_office_id', $user->office_id);
+        }
+        // Note: Regular 'verified_user' usually can't see the full list, 
+        // but if you allow them to export, they will only see what the logic permits.
+
+        // 2. Search Filter (Matches the Dashboard/Directory logic)
+        if ($request->has('search') && !empty($request->search)) {
+            $s = $request->search;
+            $query->where(function($q) use ($s) {
+                $q->where('first_name', 'like', "%{$s}%")
+                ->orWhere('last_name', 'like', "%{$s}%")
+                ->orWhere('nid_number', 'like', "%{$s}%")
+                ->orWhere('phone', 'like', "%{$s}%");
+            });
+        }
+
+        // 3. Office Filter (If you have a dropdown filter in frontend)
+        if ($request->has('office_id') && !empty($request->office_id)) {
+            $query->where('current_office_id', $request->office_id);
+        }
+
+        return $query->orderBy('created_at', 'desc');
+    }
+
+    public function exportCSV(Request $request)
+    {
+        // Fetch data using the shared filter logic
+        $employees = $this->getFilteredQuery($request)->get();
+        
+        $filename = "ems-export-" . date('Y-m-d-His') . ".csv";
 
         $headers = [
             "Content-Type" => "text/csv",
@@ -361,40 +398,81 @@ class EmployeeController extends Controller
         $callback = function() use ($employees) {
             $file = fopen('php://output', 'w');
             
-            // Header Row
-            fputcsv($file, ['ID', 'First Name', 'Last Name', 'NID', 'Designation', 'Office', 'Phone', 'Status']);
+            // 1. Detailed Headers
+            fputcsv($file, [
+                'System ID', 
+                'Full Name', 
+                'Designation', 
+                'Grade',
+                'Office / Station', 
+                'NID Number', 
+                'Phone', 
+                'Email (Login)', 
+                'Address',
+                'Current Salary',
+                'Status', 
+                'Join Date'
+            ]);
 
-            // Data Rows
-            foreach ($employees as $emp) {
-                fputcsv($file, [
-                    $emp->id,
-                    $emp->first_name,
-                    $emp->last_name,
-                    $emp->nid_number,
-                    $emp->designation->title ?? 'N/A',
-                    $emp->office->name ?? 'Unassigned',
-                    $emp->phone,
-                    $emp->status
-                ]);
-            }
+            // 2. Detailed Data Rows
+                    foreach ($employees as $emp) {
+                        fputcsv($file, [
+                            $emp->id,
+                            $emp->first_name . ' ' . $emp->last_name,
+                            $emp->designation->title ?? 'N/A', // Null Coalescing for missing designation
+                            $emp->designation->grade ?? 'N/A',
+                            $emp->office->name ?? 'Unassigned', // Null Coalescing for missing office
+                            $emp->nid_number, 
+                            $emp->phone ?? 'N/A',
+                            // 👇 THIS WAS THE CRASH. USE '?->' (Null Safe Operator)
+                            $emp->user?->email ?? 'No Account', 
+                            $emp->address ?? 'N/A',
+                            $emp->current_salary,
+                            ucfirst($emp->status),
+                            // Add check if created_at exists
+                            $emp->created_at ? $emp->created_at->format('Y-m-d') : 'N/A'
+                        ]);
+                    }
             fclose($file);
         };
 
         return response()->stream($callback, 200, $headers);
     }
 
-    // EXPORT TO PDF
-    public function exportPDF()
+    // App\Http\Controllers\EmployeeController.php
+
+    public function exportPDF(Request $request)
     {
-        $employees = Employee::with('office', 'designation')->get();
+        // 1. Get the filtered data
+        $employees = $this->getFilteredQuery($request)->get();
         
+        // 2. Build the "Filter String" for the Header
+        $filterParts = [];
+
+        if ($request->filled('search')) {
+            $filterParts[] = "Search: '{$request->search}'";
+        }
+
+        if ($request->filled('office_id')) {
+            // Find office name for the report header
+            $officeName = \App\Models\Office::find($request->office_id)?->name;
+            if ($officeName) {
+                $filterParts[] = "Office: {$officeName}";
+            }
+        }
+
+        // Join them (e.g., "Search: 'Khan', Office: HQ") or default to "All Records"
+        $filterText = empty($filterParts) ? "All Records" : implode(' | ', $filterParts);
+
         $data = [
-            'title' => 'Official Employee List - Bangladesh Railway',
-            'date' => date('d/m/Y'),
+            'title' => 'Employee Directory Report',
+            'date' => date('d M Y'),
+            'filter_applied' => $filterText, // <--- Now it contains all filters
             'employees' => $employees
         ];
 
-        $pdf = Pdf::loadView('reports.employee_list', $data);
+        $pdf = Pdf::loadView('reports.employee_list', $data)->setPaper('a4', 'landscape');
+        
         return $pdf->download('railway_employees.pdf');
     }
 }
