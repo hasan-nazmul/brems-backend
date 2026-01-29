@@ -51,4 +51,6 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/forms', [FormController::class, 'index']);
     Route::post('/forms', [FormController::class, 'store']);
+
+    Route::post('/employees/{id}/update-full', [EmployeeController::class, 'updateFullProfile']);
 });

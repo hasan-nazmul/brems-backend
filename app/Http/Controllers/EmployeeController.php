@@ -484,4 +484,68 @@ class EmployeeController extends Controller
         
         return $pdf->download('railway_employees.pdf');
     }
+
+    public function updateFullProfile(Request $request, $id)
+    {
+        try {
+            $employee = Employee::findOrFail($id);
+
+            // 1. Handle JSON Data (Family & Address)
+            // We use json_decode with fallback to empty array/object to prevent crashes
+            $familyInfo = $request->family_info ? json_decode($request->family_info, true) : null;
+            $addressInfo = $request->address_info ? json_decode($request->address_info, true) : null;
+
+            if ($familyInfo) $employee->family_info = $familyInfo;
+            if ($addressInfo) $employee->address_info = $addressInfo;
+            
+            $employee->save();
+
+            // 2. Handle Academic Records
+            if ($request->has('academics')) {
+                $records = json_decode($request->academics, true);
+
+                // If decoding failed or not an array, skip
+                if (is_array($records)) {
+                    
+                    // OPTIONAL: Clear old records if you want a full sync (uncomment next line)
+                    // $employee->academics()->delete(); 
+
+                    foreach ($records as $index => $record) {
+                        // Skip empty rows
+                        if (empty($record['exam_name'])) continue;
+
+                        // Create or Update based on ID
+                        $academic = isset($record['id']) 
+                            ? \App\Models\AcademicRecord::find($record['id']) 
+                            : new \App\Models\AcademicRecord();
+
+                        $academic->employee_id = $employee->id;
+                        $academic->exam_name = $record['exam_name'];
+                        $academic->institute = $record['institute'] ?? 'N/A';
+                        $academic->subject = $record['subject'] ?? 'N/A';
+                        $academic->passing_year = $record['passing_year'] ?? 'N/A';
+                        $academic->result_type = $record['result_type'] ?? 'N/A';
+                        $academic->result = $record['result'] ?? '0.00';
+
+                        // 3. Handle File Upload Safely
+                        // We check if the file key exists in the request array
+                        if ($request->hasFile("academic_files.$index")) {
+                            $file = $request->file("academic_files.$index");
+                            $path = $file->store('certificates', 'public');
+                            $academic->certificate_path = $path;
+                        }
+
+                        $academic->save();
+                    }
+                }
+            }
+
+            return response()->json(['message' => 'Profile Updated Successfully']);
+
+        } catch (\Exception $e) {
+            // Log the error so you can see it in storage/logs/laravel.log
+            \Illuminate\Support\Facades\Log::error('Update Profile Error: ' . $e->getMessage());
+            return response()->json(['message' => 'Server Error: ' . $e->getMessage()], 500);
+        }
+    }
 }
