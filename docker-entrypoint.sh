@@ -2,6 +2,7 @@
 set -e
 echo "Running migrations..."
 # Remember to remove :fresh --seed after the first successful deploy!
-php artisan migrate --force
+php artisan migrate:fresh --force
+php artisan db:seed --force
 echo "Starting Apache..."
 exec apache2-foreground
