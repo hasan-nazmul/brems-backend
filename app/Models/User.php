@@ -21,6 +21,7 @@ class User extends Authenticatable
         'password',
         'role',
         'is_active',
+        'last_login_at',
     ];
 
     protected $hidden = [
@@ -31,6 +32,7 @@ class User extends Authenticatable
     protected $casts = [
         'password' => 'hashed',
         'is_active' => 'boolean',
+        'last_login_at' => 'datetime',
     ];
 
     // ==================== RELATIONSHIPS ====================

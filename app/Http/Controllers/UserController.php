@@ -6,6 +6,7 @@ use App\Models\User;
 use App\Models\Office;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class UserController extends Controller
@@ -147,6 +148,7 @@ class UserController extends Controller
             'office_id' => 'sometimes|exists:offices,id',
             'role' => 'sometimes|in:super_admin,office_admin,verified_user',
             'is_active' => 'sometimes|boolean',
+            'employee_id' => ['sometimes', 'nullable', 'exists:employees,id', Rule::unique('users', 'employee_id')->ignore($id)],
         ]);
 
         // Only super admin can change role to super_admin or office_admin

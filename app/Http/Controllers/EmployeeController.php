@@ -68,6 +68,11 @@ class EmployeeController extends Controller
             $query->where('is_verified', $request->boolean('is_verified'));
         }
 
+        // Only employees without a linked user (for linking user to employee)
+        if ($request->boolean('without_user')) {
+            $query->whereDoesntHave('user');
+        }
+
         return response()->json(
             $query->orderBy('created_at', 'desc')->get()
         );
