@@ -1,8 +1,11 @@
 #!/bin/bash
 set -e
-echo "Running migrations..."
-# Remember to remove :fresh --seed after the first successful deploy!
-php artisan migrate:fresh --force
-php artisan db:seed --force
+
 echo "Starting Apache..."
+
+# Try to migrate, but don't crash if it fails
+echo "Attempting migration..."
+php artisan migrate --force || echo "Migration failed, but continuing..."
+
+# Start the server no matter what
 exec apache2-foreground
