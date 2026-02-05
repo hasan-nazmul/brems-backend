@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Employee;
+use App\Models\ProfileRequest;
 use App\Models\TransferHistory;
 use App\Models\PromotionHistory;
 use App\Models\FamilyMember;
@@ -212,7 +213,66 @@ class EmployeeController extends Controller
         $employee->max_spouses = $employee->getMaxSpouses();
         $employee->active_spouse_count = $employee->activeSpouses()->count();
 
+        // When viewing own profile, include pending document uploads so employee can see what they submitted
+        if ((int) $user->employee_id === (int) $employee->id) {
+            $employee->pending_documents = $this->getPendingDocumentsForEmployee($employee->id);
+        }
+
         return response()->json($employee);
+    }
+
+    /**
+     * Get pending Document Update profile requests for an employee (for own-profile view).
+     * Returns array keyed by document type so frontend can show pending file per slot.
+     */
+    private function getPendingDocumentsForEmployee(int $employeeId): array
+    {
+        $requests = ProfileRequest::where('employee_id', $employeeId)
+            ->where('status', 'pending')
+            ->where('request_type', 'Document Update')
+            ->orderByDesc('created_at')
+            ->get();
+
+        $pending = [];
+        foreach ($requests as $req) {
+            $changes = $req->proposed_changes;
+            if (! is_array($changes) || empty($changes['document_update'])) {
+                continue;
+            }
+            $doc = $changes['document_update'];
+            $filePath = $doc['file_path'] ?? null;
+            if (! $filePath) {
+                continue;
+            }
+            $type = $doc['type'] ?? '';
+            if (! empty($doc['employee_field'])) {
+                $key = $doc['employee_field'];
+                $pending[$key] = [
+                    'file_path' => $filePath,
+                    'request_id' => $req->id,
+                    'request_type_label' => $type,
+                    'created_at' => $req->created_at?->toIso8601String(),
+                ];
+            } elseif (! empty($doc['academic_id'])) {
+                $key = 'academic_' . $doc['academic_id'];
+                $pending[$key] = [
+                    'file_path' => $filePath,
+                    'request_id' => $req->id,
+                    'request_type_label' => $type,
+                    'created_at' => $req->created_at?->toIso8601String(),
+                ];
+            } elseif (! empty($doc['family_member_id'])) {
+                $key = 'family_member_' . $doc['family_member_id'];
+                $pending[$key] = [
+                    'file_path' => $filePath,
+                    'request_id' => $req->id,
+                    'request_type_label' => $type,
+                    'created_at' => $req->created_at?->toIso8601String(),
+                ];
+            }
+        }
+
+        return $pending;
     }
 
     // =========================================================

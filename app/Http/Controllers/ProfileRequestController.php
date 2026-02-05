@@ -53,7 +53,25 @@ class ProfileRequestController extends Controller
             $query->where('employee_id', $user->employee_id);
         }
 
-        // Status filter
+        // Search: by employee name, request type, id, or details
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $term = '%' . $search . '%';
+            $query->where(function ($q) use ($term, $search) {
+                if (is_numeric($search)) {
+                    $q->orWhere('id', (int) $search);
+                }
+                $q->orWhere('request_type', 'like', $term)
+                    ->orWhere('details', 'like', $term)
+                    ->orWhereHas('employee', function ($eq) use ($term) {
+                        $eq->where('first_name', 'like', $term)
+                            ->orWhere('last_name', 'like', $term)
+                            ->orWhereRaw("CONCAT(first_name, ' ', last_name) LIKE ?", [$term]);
+                    });
+            });
+        }
+
+        // Status filter (optional, keep for API compatibility)
         if ($request->filled('status')) {
             $query->where('status', $request->status);
         }
@@ -142,7 +160,37 @@ class ProfileRequestController extends Controller
         // Add current employee data for comparison
         $profileRequest->current_data = $this->getCurrentEmployeeData($profileRequest->employee);
 
+        // Ensure proposed_changes is always an array for the frontend (JSON column can sometimes be string)
+        $profileRequest->setAttribute(
+            'proposed_changes',
+            $this->normalizeProposedChanges($profileRequest->proposed_changes, $profileRequest)
+        );
+
         return response()->json($profileRequest);
+    }
+
+    /**
+     * Normalize proposed_changes so the API always returns an array.
+     * For "Document Update" requests, ensure document_update key exists from details if missing.
+     */
+    private function normalizeProposedChanges($proposedChanges, ProfileRequest $profileRequest): array
+    {
+        $data = $proposedChanges;
+        if (is_string($data)) {
+            $decoded = json_decode($data, true);
+            $data = is_array($decoded) ? $decoded : [];
+        }
+        if (! is_array($data)) {
+            $data = [];
+        }
+        // For Document Update type, ensure frontend can show something even if document_update key was missing
+        if ($profileRequest->request_type === 'Document Update' && empty($data['document_update']) && $profileRequest->details) {
+            $data['document_update'] = [
+                'type' => $profileRequest->details,
+                'uploaded_at' => $profileRequest->created_at?->toIso8601String() ?? now()->toIso8601String(),
+            ];
+        }
+        return $data;
     }
 
     // =========================================================
@@ -243,12 +291,15 @@ class ProfileRequestController extends Controller
             DB::transaction(function () use ($profileRequest, $validated, $user) {
                 $employee = $profileRequest->employee;
 
-                // If approved, apply the changes
                 if ($validated['is_approved']) {
+                    // If approved, apply the changes
                     $changesToApply = $validated['approved_changes']
                         ?? $profileRequest->proposed_changes;
 
                     $this->applyChanges($employee, $changesToApply);
+                } else {
+                    // If rejected, revert document/file changes so they are not left applied
+                    $this->revertDocumentUpdateIfAny($profileRequest);
                 }
 
                 // Update request status
@@ -304,6 +355,143 @@ class ProfileRequestController extends Controller
         // 5. Apply File Changes (move from temp to permanent)
         if (isset($changes['files']) && is_array($changes['files'])) {
             $this->applyFileChanges($employee, $changes['files']);
+        }
+
+        // 6. Apply Document Update (move pending file to final location and update employee/academic/family)
+        if (isset($changes['document_update']) && is_array($changes['document_update'])) {
+            $this->applyDocumentUpdate($employee, $changes['document_update']);
+        }
+    }
+
+    /**
+     * On approve: move file from pending path to final location and update the employee (or academic/family) record.
+     */
+    private function applyDocumentUpdate(Employee $employee, array $documentUpdate): void
+    {
+        $pendingPath = $documentUpdate['file_path'] ?? null;
+        if (! $pendingPath || ! Storage::disk('public')->exists($pendingPath)) {
+            return;
+        }
+
+        $ext = pathinfo($pendingPath, PATHINFO_EXTENSION);
+        $isPending = str_contains($pendingPath, 'documents/pending/');
+
+        if (! empty($documentUpdate['employee_field'])) {
+            $field = $documentUpdate['employee_field'];
+            if (! in_array($field, ['profile_picture', 'nid_file_path', 'birth_file_path'], true)) {
+                return;
+            }
+            if ($field === 'profile_picture') {
+                $finalDir = 'photos';
+                $finalFilename = ($employee->nid_number ?: 'emp' . $employee->id) . '_' . time() . '.' . $ext;
+            } elseif ($field === 'nid_file_path') {
+                $finalDir = 'documents/nid';
+                $finalFilename = 'NID_' . ($employee->nid_number ?: $employee->id) . '_' . time() . '.' . $ext;
+            } else {
+                $finalDir = 'documents/birth';
+                $finalFilename = 'BIRTH_' . ($employee->nid_number ?: $employee->id) . '_' . time() . '.' . $ext;
+            }
+            $finalPath = $finalDir . '/' . $finalFilename;
+            if ($isPending) {
+                Storage::disk('public')->move($pendingPath, $finalPath);
+            } else {
+                $contents = Storage::disk('public')->get($pendingPath);
+                Storage::disk('public')->put($finalPath, $contents);
+                Storage::disk('public')->delete($pendingPath);
+            }
+            if ($employee->$field) {
+                Storage::disk('public')->delete($employee->$field);
+            }
+            $employee->update([$field => $finalPath]);
+            return;
+        }
+
+        if (! empty($documentUpdate['academic_id'])) {
+            $academic = AcademicRecord::where('employee_id', $employee->id)->find($documentUpdate['academic_id']);
+            if ($academic) {
+                $examSlug = str_replace(['/', ' '], '_', $academic->exam_name ?? 'cert');
+                $finalFilename = 'CERT_' . $employee->nid_number . '_' . $examSlug . '_' . time() . '.' . $ext;
+                $finalPath = 'documents/certificates/' . $finalFilename;
+                if ($isPending) {
+                    Storage::disk('public')->move($pendingPath, $finalPath);
+                } else {
+                    $contents = Storage::disk('public')->get($pendingPath);
+                    Storage::disk('public')->put($finalPath, $contents);
+                    Storage::disk('public')->delete($pendingPath);
+                }
+                if ($academic->certificate_path) {
+                    Storage::disk('public')->delete($academic->certificate_path);
+                }
+                $academic->update(['certificate_path' => $finalPath]);
+            }
+            return;
+        }
+
+        if (! empty($documentUpdate['family_member_id'])) {
+            $member = FamilyMember::where('employee_id', $employee->id)->find($documentUpdate['family_member_id']);
+            if ($member) {
+                $nameSlug = str_replace(' ', '_', $member->name ?? 'child');
+                $finalFilename = 'CHILD_BIRTH_' . $employee->nid_number . '_' . $nameSlug . '_' . time() . '.' . $ext;
+                $finalPath = 'documents/children/' . $finalFilename;
+                if ($isPending) {
+                    Storage::disk('public')->move($pendingPath, $finalPath);
+                } else {
+                    $contents = Storage::disk('public')->get($pendingPath);
+                    Storage::disk('public')->put($finalPath, $contents);
+                    Storage::disk('public')->delete($pendingPath);
+                }
+                if ($member->birth_certificate_path) {
+                    Storage::disk('public')->delete($member->birth_certificate_path);
+                }
+                $member->update(['birth_certificate_path' => $finalPath]);
+            }
+        }
+    }
+
+    /**
+     * When a "Document Update" request is rejected: delete the pending file.
+     * Only clear employee/academic/family field if it still points at this path (legacy applied-at-upload requests).
+     */
+    private function revertDocumentUpdateIfAny(ProfileRequest $profileRequest): void
+    {
+        if ($profileRequest->request_type !== 'Document Update') {
+            return;
+        }
+
+        $proposed = $profileRequest->proposed_changes;
+        if (! is_array($proposed) || empty($proposed['document_update'])) {
+            return;
+        }
+
+        $doc = $proposed['document_update'];
+        $filePath = $doc['file_path'] ?? null;
+        $employee = $profileRequest->employee;
+
+        if (! $filePath || ! $employee) {
+            return;
+        }
+
+        // Delete the file from storage (pending or legacy applied path)
+        if (Storage::disk('public')->exists($filePath)) {
+            Storage::disk('public')->delete($filePath);
+        }
+
+        // Clear the field only if it still points at this path (legacy: was applied at upload before we moved to pending flow)
+        if (! empty($doc['employee_field'])) {
+            $field = $doc['employee_field'];
+            if (in_array($field, ['profile_picture', 'nid_file_path', 'birth_file_path'], true) && $employee->$field === $filePath) {
+                $employee->update([$field => null]);
+            }
+        } elseif (! empty($doc['academic_id'])) {
+            $academic = AcademicRecord::where('employee_id', $employee->id)->find($doc['academic_id']);
+            if ($academic && $academic->certificate_path === $filePath) {
+                $academic->update(['certificate_path' => null]);
+            }
+        } elseif (! empty($doc['family_member_id'])) {
+            $member = FamilyMember::where('employee_id', $employee->id)->find($doc['family_member_id']);
+            if ($member && $member->birth_certificate_path === $filePath) {
+                $member->update(['birth_certificate_path' => null]);
+            }
         }
     }
 

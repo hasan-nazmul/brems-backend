@@ -114,8 +114,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/employees/{id}/release', [EmployeeController::class, 'release']);
         Route::post('/employees/{id}/transfer', [EmployeeController::class, 'transfer']);
         Route::post('/employees/{id}/access', [EmployeeController::class, 'manageAccess']);
-        Route::post('/employees/{id}/photo', [EmployeeController::class, 'uploadPhoto']);
-        Route::post('/employees/{id}/document', [EmployeeController::class, 'uploadDocument']);
+        // Photo/document uploads are handled by FileController (allows own-employee for verified users)
     });
 
     // Super Admin Only
