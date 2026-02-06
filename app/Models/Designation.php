@@ -11,12 +11,29 @@ class Designation extends Model
         'title',
         'title_bn',
         'grade',
-        'basic_salary'
+        'salary_min',
+        'salary_max',
+        'method_of_recruitment',
+        'qualifications',
     ];
 
     protected $casts = [
-        'basic_salary' => 'decimal:2'
+        'salary_min' => 'decimal:2',
+        'salary_max' => 'decimal:2',
     ];
+
+    // ==================== ACCESSORS ====================
+
+    /**
+     * Get formatted salary range
+     */
+    public function getSalaryRangeAttribute(): string
+    {
+        if ($this->salary_min == $this->salary_max) {
+            return number_format($this->salary_min, 0);
+        }
+        return number_format($this->salary_min, 0) . ' - ' . number_format($this->salary_max, 0);
+    }
 
     // ==================== RELATIONSHIPS ====================
 
