@@ -4,9 +4,18 @@ namespace App\Http\Controllers;
 
 use App\Models\Office;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class OfficeController extends Controller
 {
+    /**
+     * Get available zones for dropdowns
+     */
+    public function zones()
+    {
+        return response()->json(Office::getZonesForApi());
+    }
+
     /**
      * List all offices
      * Available to all authenticated users (for dropdowns)
@@ -18,22 +27,28 @@ class OfficeController extends Controller
                 $q->where('status', 'active');
             }]);
 
-        // Optional: Filter by parent
+        // Filter by zone
+        if ($request->filled('zone')) {
+            $query->where('zone', $request->zone);
+        }
+
+        // Filter by parent
         if ($request->filled('parent_id')) {
             $query->where('parent_id', $request->parent_id);
         }
 
-        // Optional: Only root offices
+        // Only root offices
         if ($request->boolean('root_only')) {
             $query->whereNull('parent_id');
         }
 
-        $offices = $query->orderBy('name')->get();
+        $offices = $query->orderBy('zone')->orderBy('name')->get();
 
         // Add computed fields
         $offices->each(function ($office) {
             $office->has_admin = $office->hasAdmin();
             $office->child_count = $office->children()->count();
+            $office->zone_label = $office->zone_label;
         });
 
         return response()->json($offices);
@@ -42,12 +57,19 @@ class OfficeController extends Controller
     /**
      * Get office hierarchy tree
      */
-    public function tree()
+    public function tree(Request $request)
     {
-        $offices = Office::with(['children.children.children']) // 3 levels deep
+        $query = Office::with(['children.children.children'])
             ->whereNull('parent_id')
-            ->orderBy('name')
-            ->get();
+            ->orderBy('zone')
+            ->orderBy('name');
+
+        // Filter by zone
+        if ($request->filled('zone')) {
+            $query->where('zone', $request->zone);
+        }
+
+        $offices = $query->get();
 
         return response()->json($this->buildTree($offices));
     }
@@ -62,6 +84,8 @@ class OfficeController extends Controller
                 'id' => $office->id,
                 'name' => $office->name,
                 'code' => $office->code,
+                'zone' => $office->zone,
+                'zone_label' => $office->zone_label,
                 'location' => $office->location,
                 'has_admin' => $office->hasAdmin(),
                 'employee_count' => $office->employees()->where('status', 'active')->count(),
@@ -86,6 +110,7 @@ class OfficeController extends Controller
         ])->findOrFail($id);
 
         $office->has_admin = $office->hasAdmin();
+        $office->zone_label = $office->zone_label;
         $office->admin = $office->users()
             ->where('role', 'office_admin')
             ->where('is_active', true)
@@ -101,10 +126,17 @@ class OfficeController extends Controller
     {
         $validated = $request->validate([
             'name' => 'required|string|max:255',
+            'zone' => ['nullable', Rule::in(array_keys(Office::ZONES))],
             'code' => 'required|string|max:50|unique:offices,code',
             'location' => 'required|string|max:255',
             'parent_id' => 'nullable|exists:offices,id',
         ]);
+
+        // If parent has a zone and no zone specified, inherit from parent
+        if (empty($validated['zone']) && !empty($validated['parent_id'])) {
+            $parent = Office::find($validated['parent_id']);
+            $validated['zone'] = $parent->zone;
+        }
 
         $office = Office::create($validated);
 
@@ -123,6 +155,7 @@ class OfficeController extends Controller
 
         $validated = $request->validate([
             'name' => 'sometimes|string|max:255',
+            'zone' => ['nullable', Rule::in(array_keys(Office::ZONES))],
             'code' => 'sometimes|string|max:50|unique:offices,code,' . $id,
             'location' => 'sometimes|string|max:255',
             'parent_id' => 'nullable|exists:offices,id',
@@ -147,15 +180,22 @@ class OfficeController extends Controller
 
         $office->update($validated);
 
+        // Optionally update children zones if this is a root office
+        if (isset($validated['zone']) && $request->boolean('update_children_zone')) {
+            $office->children()->update(['zone' => $validated['zone']]);
+        }
+
+        $fresh = $office->fresh()->load('parent');
+        $fresh->zone_label = $fresh->zone_label;
+
         return response()->json([
             'message' => 'Office updated successfully',
-            'office' => $office->fresh()->load('parent')
+            'office' => $fresh
         ]);
     }
 
     /**
      * Delete office (Super Admin only)
-     * Only if no employees are assigned
      */
     public function destroy($id)
     {
@@ -191,8 +231,13 @@ class OfficeController extends Controller
             ->withCount(['employees' => function ($q) {
                 $q->where('status', 'active');
             }])
+            ->orderBy('zone')
             ->orderBy('name')
             ->get();
+
+        $offices->each(function ($office) {
+            $office->zone_label = $office->zone_label;
+        });
 
         return response()->json($offices);
     }

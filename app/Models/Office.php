@@ -8,12 +8,58 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Office extends Model
 {
+    // ==================== ZONE CONSTANTS ====================
+    
+    public const ZONE_CENTER = 'center';
+    public const ZONE_EAST = 'east';
+    public const ZONE_WEST = 'west';
+
+    public const ZONES = [
+        self::ZONE_CENTER => 'Center (Headquarters)',
+        self::ZONE_EAST => 'East Zone',
+        self::ZONE_WEST => 'West Zone, Rajshahi',
+    ];
+
+    // ==================== FILLABLE ====================
+
     protected $fillable = [
         'parent_id',
         'name',
+        'zone',
         'code',
-        'location'
+        'location',
     ];
+
+    // ==================== ACCESSORS ====================
+
+    /**
+     * Get zone display name
+     */
+    public function getZoneLabelAttribute(): ?string
+    {
+        return self::ZONES[$this->zone] ?? $this->zone;
+    }
+
+    /**
+     * Get all available zones (for dropdowns)
+     */
+    public static function getZones(): array
+    {
+        return self::ZONES;
+    }
+
+    /**
+     * Get zones as array for API response
+     */
+    public static function getZonesForApi(): array
+    {
+        return collect(self::ZONES)->map(function ($label, $value) {
+            return [
+                'value' => $value,
+                'label' => $label,
+            ];
+        })->values()->toArray();
+    }
 
     // ==================== RELATIONSHIPS ====================
 
@@ -35,6 +81,16 @@ class Office extends Model
     public function users(): HasMany
     {
         return $this->hasMany(User::class);
+    }
+
+    // ==================== SCOPES ====================
+
+    /**
+     * Filter by zone
+     */
+    public function scopeInZone($query, string $zone)
+    {
+        return $query->where('zone', $zone);
     }
 
     // ==================== HELPER METHODS ====================
@@ -85,7 +141,6 @@ class Office extends Model
         foreach ($this->children as $child) {
             if (!$child->hasAdmin()) {
                 $ids[] = $child->id;
-                // Recursively add adminless descendants
                 $ids = array_merge($ids, $this->getAdminlessDescendantIds($child));
             }
         }

@@ -246,6 +246,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/transfers', [ReportController::class, 'transferReport']);
         Route::get('/promotions', [ReportController::class, 'promotionReport']);
         Route::get('/profile-requests', [ReportController::class, 'profileRequestReport']);
+        Route::get('/offices/zones', [OfficeController::class, 'zones']);
         Route::get('/offices', [ReportController::class, 'officeReport']);
         Route::get('/form-submissions', [ReportController::class, 'formSubmissionReport']);
 
