@@ -20,7 +20,15 @@ class DashboardController extends Controller
     public function index(Request $request)
     {
         $user = $request->user();
-        $officeIds = $user->getManagedOfficeIds();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated'], 401);
+        }
+
+        try {
+            $officeIds = $user->getManagedOfficeIds();
+        } catch (\Throwable $e) {
+            $officeIds = [];
+        }
 
         // 1. Basic Counters
         $counts = $this->getCounts($user, $officeIds);
@@ -52,7 +60,7 @@ class DashboardController extends Controller
         $employeeQuery = Employee::where('status', 'active');
         $requestQuery = ProfileRequest::where('status', 'pending');
 
-        if (!$user->isSuperAdmin()) {
+        if (!$user->isSuperAdmin() && !empty($officeIds)) {
             $employeeQuery->whereIn('current_office_id', $officeIds);
             $requestQuery->whereHas('employee', function ($q) use ($officeIds) {
                 $q->whereIn('current_office_id', $officeIds);
@@ -80,7 +88,7 @@ class DashboardController extends Controller
             $q->where('status', 'active');
         }]);
 
-        if (!$user->isSuperAdmin()) {
+        if (!$user->isSuperAdmin() && !empty($officeIds)) {
             $query->whereIn('id', $officeIds);
         }
 
@@ -108,7 +116,7 @@ class DashboardController extends Controller
             ->latest('transfer_date')
             ->take(10);
 
-        if (!$user->isSuperAdmin()) {
+        if (!$user->isSuperAdmin() && !empty($officeIds)) {
             $transferQuery->where(function ($q) use ($officeIds) {
                 $q->whereIn('from_office_id', $officeIds)
                   ->orWhereIn('to_office_id', $officeIds);
@@ -116,40 +124,44 @@ class DashboardController extends Controller
         }
 
         $transfers = $transferQuery->get()->map(function ($item) {
+            if (!$item->employee) return null;
             $fromName = $item->fromOffice ? $item->fromOffice->name : 'Initial Posting';
+            $toName = $item->toOffice ? $item->toOffice->name : 'N/A';
             return [
                 'type' => 'transfer',
                 'icon' => 'arrow-right-left',
                 'date' => $item->transfer_date->format('Y-m-d'),
                 'title' => 'Employee Transfer',
-                'description' => "{$item->employee->full_name} transferred from {$fromName} to {$item->toOffice->name}",
+                'description' => "{$item->employee->full_name} transferred from {$fromName} to {$toName}",
                 'id' => $item->id,
                 'employee_id' => $item->employee_id,
             ];
-        });
+        })->filter()->values();
 
         // Recent Promotions
         $promotionQuery = PromotionHistory::with(['employee', 'newDesignation'])
             ->latest('promotion_date')
             ->take(10);
 
-        if (!$user->isSuperAdmin()) {
+        if (!$user->isSuperAdmin() && !empty($officeIds)) {
             $promotionQuery->whereHas('employee', function ($q) use ($officeIds) {
                 $q->whereIn('current_office_id', $officeIds);
             });
         }
 
         $promotions = $promotionQuery->get()->map(function ($item) {
+            if (!$item->employee) return null;
+            $designationTitle = $item->newDesignation ? $item->newDesignation->title : 'N/A';
             return [
                 'type' => 'promotion',
                 'icon' => 'trending-up',
                 'date' => $item->promotion_date->format('Y-m-d'),
                 'title' => 'Employee Promotion',
-                'description' => "{$item->employee->full_name} promoted to {$item->newDesignation->title}",
+                'description' => "{$item->employee->full_name} promoted to {$designationTitle}",
                 'id' => $item->id,
                 'employee_id' => $item->employee_id,
             ];
-        });
+        })->filter()->values();
 
         // Recent Profile Requests
         $requestQuery = ProfileRequest::with(['employee'])
@@ -157,13 +169,14 @@ class DashboardController extends Controller
             ->latest('reviewed_at')
             ->take(5);
 
-        if (!$user->isSuperAdmin()) {
+        if (!$user->isSuperAdmin() && !empty($officeIds)) {
             $requestQuery->whereHas('employee', function ($q) use ($officeIds) {
                 $q->whereIn('current_office_id', $officeIds);
             });
         }
 
         $requests = $requestQuery->get()->map(function ($item) {
+            if (!$item->employee) return null;
             $status = $item->is_approved ? 'approved' : 'rejected';
             return [
                 'type' => 'request_' . $status,
@@ -174,7 +187,7 @@ class DashboardController extends Controller
                 'id' => $item->id,
                 'employee_id' => $item->employee_id,
             ];
-        });
+        })->filter()->values();
 
         // Merge and sort by date
         return $transfers->merge($promotions)
@@ -194,7 +207,7 @@ class DashboardController extends Controller
             ->where('status', 'pending')
             ->latest();
 
-        if (!$user->isSuperAdmin()) {
+        if (!$user->isSuperAdmin() && !empty($officeIds)) {
             $requestQuery->whereHas('employee', function ($q) use ($officeIds) {
                 $q->whereIn('current_office_id', $officeIds);
             });
@@ -204,7 +217,7 @@ class DashboardController extends Controller
             return [
                 'id' => $item->id,
                 'type' => 'profile_request',
-                'employee_name' => $item->employee->full_name,
+                'employee_name' => $item->employee?->full_name ?? 'Unknown',
                 'employee_id' => $item->employee_id,
                 'request_type' => $item->request_type,
                 'submitted_at' => $item->created_at->format('Y-m-d H:i'),
@@ -217,7 +230,7 @@ class DashboardController extends Controller
             ->where('is_verified', false)
             ->latest();
 
-        if (!$user->isSuperAdmin()) {
+        if (!$user->isSuperAdmin() && !empty($officeIds)) {
             $unverifiedQuery->whereIn('current_office_id', $officeIds);
         }
 

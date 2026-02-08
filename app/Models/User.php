@@ -75,7 +75,7 @@ class User extends Authenticatable
             return Office::pluck('id')->toArray();
         }
 
-        if ($this->isOfficeAdmin()) {
+        if ($this->isOfficeAdmin() && $this->office) {
             return $this->office->getManagedOfficeIds();
         }
 
